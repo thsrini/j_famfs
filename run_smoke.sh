@@ -96,6 +96,7 @@ while (( $# > 0)); do
 	    SKIP_PCQ=1
 	    SKIP_FIO=1
 	    SKIP_ERRS=
+	    SKIP_PMD_FAULTS=1
 	    ;;
 	(-f|--justfio)
 	    SKIP_TEST0=1
@@ -105,6 +106,7 @@ while (( $# > 0)); do
 	    SKIP_TEST4=1
 	    SKIP_PCQ=1
 #	    SKIP_FIO=0
+	    SKIP_PMD_FAULTS=1
 	    ;;
 	(--justpcq)
 	    SKIP_TEST0=1
@@ -117,6 +119,7 @@ while (( $# > 0)); do
 	    SKIP_SHADOW_YAML=1
 	    SKIP_STRIPE_TEST=1
 	    COVERAGE=0
+	    SKIP_PMD_FAULTS=1
 	    ;;
 	(--mmap-only)
 	    # Run prepare followed by the mmap test only
@@ -130,6 +133,23 @@ while (( $# > 0)); do
 	    SKIP_TEST4=1
 	    SKIP_ERRS=1
 	    SKIP_STRIPE_TEST=1
+	    SKIP_PCQ=1
+	    SKIP_FIO=1
+	    ;;
+	(--justpmd)
+	    # Run prepare followed by the PMD fault test only
+	    SKIP_DAXMODE=1
+	    SKIP_LOAD_MODULE=1
+	    SKIP_TEST0=1
+	    SKIP_SHADOW_YAML=1
+	    SKIP_TEST1=1
+	    SKIP_TEST2=1
+	    SKIP_TEST3=1
+	    SKIP_TEST4=1
+	    SKIP_MMAP=1
+	    SKIP_ERRS=1
+	    SKIP_STRIPE_TEST=1
+	    SKIP_TEST_4K=1
 	    SKIP_PCQ=1
 	    SKIP_FIO=1
 	    ;;
@@ -148,6 +168,7 @@ while (( $# > 0)); do
 	    SKIP_FIO=1
 	    SKIP_ERRS=1
 	    SKIP_STRIPE_TEST=1
+	    SKIP_PMD_FAULTS=1
 	    ;;
 	(--stripe)
 	    # Just test0 and test_shadow_yaml
@@ -161,6 +182,7 @@ while (( $# > 0)); do
 	    SKIP_ERRS=1
 	    SKIP_SHADOW_YAML=1
 	    #SKIP_STRIPE_TEST=
+	    SKIP_PMD_FAULTS=1
 	    ;;
 	(-N|--nosleep)
 	    SLEEP_TIME=0
@@ -212,6 +234,7 @@ if [ -z "$FAMFS_MODE" ]; then
     if [ $(famfs_fuse_supported) -ge 1 ]; then
 	echo "Defaulting to fuse mode"
 	FAMFS_MODE="fuse"
+	famfs_check_fuse_abi "$BIN/famfs_fused" || exit 1
     elif [ $(famfs_v1_supported) -eq 1 ]; then
 	echo "Fuse mode not enabled; defaulting to v1 mode"
 	FAMFS_MODE="v1"
@@ -231,6 +254,7 @@ else
     else
 	if [ $(famfs_fuse_supported) -ge 1 ]; then
 	    echo "Smoke: testing famfs in fuse mode"
+	    famfs_check_fuse_abi "$BIN/famfs_fused" || exit 1
 	else
 	    echo "ERROR: famfs-fuse was specified, but the kernel does not support it"
 	    exit 1
@@ -256,6 +280,7 @@ echo ":==*****************************************************************"
 echo ":== run_smoke.sh $(date)"
 echo ":==MODE:     $FAMFS_MODE"
 echo ":==ABI:      $FAMFS_ABI  (standalone ioctl ABI; n/a in fuse mode)"
+echo ":==FUSE ABI: kernel=$(famfs_kernel_fuse_abi) famfs_fused=$(famfs_fused_fuse_abi "$BIN/famfs_fused")"
 echo ":==CWD:      $CWD"
 echo ":==BIN:      $BIN"
 echo ":==SCRIPTS:  $SCRIPTS"
@@ -447,6 +472,25 @@ if [ -z "$SKIP_MMAP" ]; then
     sleep "${SLEEP_TIME}"
 else
     echo ":== skipped test_mmap due to run_smoke options"
+fi
+
+# test_pmd_faults decides PMD-vs-PTE from the helper's own page fault count,
+# which valgrind's shadow memory inflates by thousands, so it is skipped in
+# --valgrind mode. Checked before SKIP_PMD_FAULTS so --valgrind wins even
+# when combined with --justpmd.
+if [ -n "$VGARG" ]; then
+    echo ":== skipped test_pmd_faults under valgrind (fault counts are not meaningful)"
+elif [ -z "$SKIP_PMD_FAULTS" ]; then
+    start_time=$(date +%s)
+    ./smoke/test_pmd_faults.sh "${SMOKE_ARGS[@]}" || exit -1
+    sudo chown -R ${id}:${grp} $BIN # fixup permissions for gcov
+    elapsed=$(($(date +%s) - start_time))
+    TEST_NAMES+=("test_pmd_faults")
+    TEST_TIMES+=("$elapsed")
+    echo ":== test_pmd_faults success ($(format_time $elapsed))"
+    sleep "${SLEEP_TIME}"
+else
+    echo ":== skipped test_pmd_faults due to run_smoke options"
 fi
 
 if [ -z "$SKIP_ERRS" ]; then
